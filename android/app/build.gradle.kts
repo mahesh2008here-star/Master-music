@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.masterwave.music"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.masterwave.music"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 520
         versionName = "5.2.0"
     }
@@ -63,12 +63,12 @@ dependencies {
     // NewPipeExtractor (TeamNewPipe)
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.24.8")
 
-    // AndroidX Media3 ExoPlayer + MediaSession
-    implementation("androidx.media3:media3-exoplayer:1.5.0")
-    implementation("androidx.media3:media3-session:1.5.0")
-    implementation("androidx.media3:media3-common:1.5.0")
+    // AndroidX Media3 ExoPlayer + MediaSession (API 34 compatible)
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-session:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
 
     // Networking & Async
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

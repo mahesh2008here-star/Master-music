@@ -37,18 +37,23 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Pre-Installed Android SDK & Licenses
+        run: |
+          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$SDK_DIR"
+          export ANDROID_SDK_ROOT="$SDK_DIR"
+          mkdir -p "$SDK_DIR/licenses"
+          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+          echo "sdk.dir=$SDK_DIR" > android/local.properties
+          echo "Configured Android SDK at $SDK_DIR"
 
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Build Signed Android APK via Gradle
+      - name: Install Gradle 8.9 & Build Signed Android APK
         working-directory: android
         run: |
-          gradle assembleRelease assembleDebug --no-daemon --stacktrace
+          curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle-8.9.zip
+          unzip -q -o /tmp/gradle-8.9.zip -d /tmp
+          /tmp/gradle-8.9/bin/gradle assembleRelease assembleDebug --no-daemon --stacktrace
 
       - name: Prepare Installable APK Asset
         run: |
@@ -66,28 +71,28 @@ jobs:
           name: MasterWave-v5.2.0-APK
           path: MasterWave-v5.2.0.apk
 
-      - name: Publish APK to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v5.2.0
-          name: MasterWave Music v5.2.0 (Android APK)
-          body: |
-            ## MasterWave Music v5.2.0 — Official Android APK Release
-
-            ### 📱 Direct Phone Installation (No Laptop or USB Debugging Needed)
-            1. Download **`MasterWave-v5.2.0.apk`** from the **Assets** section below.
-            2. Open the downloaded `.apk` file on your Android phone and tap **Install**.
-
-            ### ✨ What's Included
-            - **Apple Music & Material You UI**: Liquid Glass dock, atmospheric blurred artwork, and Echo Music styled settings.
-            - **Mirrored Acoustic Micro-Filament Waveform**: Hi-DPI canvas seekbar with glowing progress and touch scrubbing.
-            - **YouTube Music & Spotify Co-Listening Engine**: Top Picks auto-scrolling carousel, Quick Picks, and 3-minute dynamic taste refresh.
-            - **Multi-Provider Search & Entity Pages**: Unified search across Songs, Albums, Artists, Podcasts, and Playlists with full Artist & Album views.
-            - **Offline Storage & Device Export**: Download songs with merged cover art and `.lrc` synced lyrics for offline playback.
-          files: |
-            MasterWave-v5.2.0.apk
-            masterwave-web-v5.2.0.tar.gz
-          draft: false
-          prerelease: false
+      - name: Publish APK to GitHub Releases via GitHub CLI
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="## MasterWave Music v5.2.0 — Official Android APK Release
+
+          ### Direct Phone Installation
+          1. Download **MasterWave-v5.2.0.apk** under Assets below.
+          2. Tap the downloaded APK on your phone and select **Install**."
+
+          # Ensure v5.2.0 release exists and upload APK
+          if ! gh release view v5.2.0 >/dev/null 2>&1; then
+            gh release create v5.2.0 MasterWave-v5.2.0.apk masterwave-web-v5.2.0.tar.gz \
+              --title "MasterWave Music v5.2.0 (Android APK)" \
+              --notes "$NOTES"
+          else
+            gh release upload v5.2.0 MasterWave-v5.2.0.apk masterwave-web-v5.2.0.tar.gz --clobber
+          fi
+
+          # Also attach MasterWave-v5.2.0.apk to any other existing releases the user created
+          for TAG in $(gh release list --limit 10 --json tagName -q '.[].tagName'); do
+            if [ "$TAG" != "v5.2.0" ]; then
+              gh release upload "$TAG" MasterWave-v5.2.0.apk masterwave-web-v5.2.0.tar.gz --clobber || true
+            fi
+          done
