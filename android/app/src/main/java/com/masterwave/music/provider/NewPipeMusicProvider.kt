@@ -14,9 +14,6 @@ import org.schabi.newpipe.extractor.stream.StreamInfoItem
 /**
  * Real NewPipeExtractor MusicProvider implementation for Android.
  * Supports YouTube (Music / Video) and SoundCloud via TeamNewPipe ServiceList.
- *
- * Integrity rule: NewPipe streams from YouTube/SoundCloud are lossy (Opus / M4A AAC)
- * and are never falsely labeled as FLAC or lossless.
  */
 class NewPipeMusicProvider(
     private val service: StreamingService = ServiceList.YouTube
@@ -67,7 +64,7 @@ class NewPipeMusicProvider(
                 id = streamInfo.url,
                 title = streamInfo.name ?: "Unknown Title",
                 artist = streamInfo.uploaderName ?: "Unknown Artist",
-                album = streamInfo.category ?: "NewPipe Stream",
+                album = streamInfo.category.ifBlank { "NewPipe Stream" },
                 durationSeconds = streamInfo.duration.coerceAtLeast(0L),
                 artworkUrl = streamInfo.thumbnails.maxByOrNull { it.width }?.url ?: "",
                 providerId = providerId,
@@ -85,7 +82,7 @@ class NewPipeMusicProvider(
             val url = normalizeTrackUrl(track.id)
             val streamInfo = StreamInfo.getInfo(service, url)
             val audioStreams = streamInfo.audioStreams
-                .filter { !it.isVideoOnly && !it.content.isNullOrBlank() }
+                .filter { !it.content.isNullOrBlank() }
 
             if (audioStreams.isEmpty()) {
                 throw IllegalStateException("No playable audio streams returned by NewPipeExtractor for $url")
@@ -93,12 +90,14 @@ class NewPipeMusicProvider(
 
             val selected = selectAudioStream(audioStreams, preferredQuality)
             val formatName = selected.format?.name ?: "WEBMA_OPUS"
+            val mime = selected.format?.mimeType ?: ""
             val isOpus = formatName.contains("OPUS", ignoreCase = true) ||
-                (selected.codec?.contains("opus", ignoreCase = true) == true)
+                mime.contains("opus", ignoreCase = true) ||
+                mime.contains("webm", ignoreCase = true)
 
             StreamResolution(
                 streamUrl = selected.content,
-                mimeType = selected.format?.mimeType ?: if (isOpus) "audio/webm" else "audio/mp4",
+                mimeType = mime.ifBlank { if (isOpus) "audio/webm" else "audio/mp4" },
                 codec = if (isOpus) "Opus" else "AAC-LC",
                 container = if (isOpus) "WebM" else "MP4 / M4A",
                 sampleRate = if (isOpus) 48000 else 44100,

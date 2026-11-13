@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -16,6 +15,16 @@ android {
         versionName = "5.2.0"
     }
 
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        debug {
+            isDebuggable = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -24,16 +33,32 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += listOf(
+            "-opt-in=kotlin.RequiresOptIn",
+            "-Xsuppress-version-warnings"
+        )
     }
 
-    buildFeatures {
-        compose = true
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+        }
     }
 }
 
 dependencies {
-    // Core library desugaring required by NewPipeExtractor for minSdk < 33
+    // Core library desugaring required by NewPipeExtractor
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
+
+    // AndroidX WebKit for WebViewAssetLoader
+    implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.core:core-ktx:1.13.1")
 
     // NewPipeExtractor (TeamNewPipe)
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.24.8")

@@ -1,6 +1,9 @@
+@file:Suppress("UnsafeOptInUsageError")
+
 package com.masterwave.music.playback
 
 import androidx.media3.common.Format
+import androidx.media3.common.util.UnstableApi
 
 data class AudioQualityReport(
     val codec: String,
@@ -16,6 +19,7 @@ data class AudioQualityReport(
     val badgeLabel: String
 )
 
+@OptIn(UnstableApi::class)
 class AudioQualityInspector {
 
     fun inspectFormat(format: Format?, activeOutputDevice: String = "Built-in Speaker"): AudioQualityReport {
@@ -41,13 +45,12 @@ class AudioQualityInspector {
         val isAac = sampleMimeType.contains("mp4a", ignoreCase = true) || sampleMimeType.contains("aac", ignoreCase = true)
 
         val sampleRate = format.sampleRate
-        val bitDepth = if (isFlac) 16 else null // Or 24 if PCM_24BIT
+        val bitDepth = if (isFlac) 16 else null
         val bitrate = if (format.bitrate != Format.NO_VALUE) format.bitrate / 1000 else if (isOpus) 139 else 256
 
         val isLossless = isFlac || sampleMimeType.contains("wav", ignoreCase = true)
         val isHiRes = isLossless && (sampleRate >= 88200 || (bitDepth != null && bitDepth >= 24))
 
-        // Android AudioFlinger normally resamples non-48kHz audio to 48kHz unless Direct PCM / USB DAC is used
         val isResampled = activeOutputDevice != "USB DAC (Bit-Perfect)" && sampleRate != 48000
 
         val badgeLabel = when {

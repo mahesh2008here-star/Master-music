@@ -1,12 +1,13 @@
+@file:Suppress("UnsafeOptInUsageError")
+
 package com.masterwave.music.playback
 
-import android.app.Notification
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -18,6 +19,7 @@ import com.masterwave.music.MainActivity
  * Handles background playback, MediaSession publication, lock-screen controls,
  * and audio focus transitions.
  */
+@OptIn(UnstableApi::class)
 class MasterWavePlayerService : MediaSessionService() {
 
     private var player: ExoPlayer? = null
@@ -31,7 +33,7 @@ class MasterWavePlayerService : MediaSessionService() {
     private fun initializePlayer() {
         val renderersFactory = DefaultRenderersFactory(this).apply {
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-            setEnableAudioFloatOutput(true) // Enables 24-bit/32-bit float audio pipeline
+            setEnableAudioFloatOutput(true)
         }
 
         val audioAttributes = AudioAttributes.Builder()
@@ -40,7 +42,7 @@ class MasterWavePlayerService : MediaSessionService() {
             .build()
 
         player = ExoPlayer.Builder(this, renderersFactory)
-            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+            .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build().apply {
