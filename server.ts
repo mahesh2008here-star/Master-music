@@ -830,7 +830,7 @@ async function startServer() {
       const yt = await getInnertube();
       for (const clientName of ['ANDROID', 'IOS', 'WEB'] as const) {
         try {
-          const info = await yt.getBasicInfo(videoId, { client: clientName });
+          const info = await yt.getBasicInfo(videoId, clientName as any);
           const fmt = info.chooseFormat({ type: 'audio', quality: 'best' });
           if (fmt && fmt.url) {
             const isOpus = (fmt.mime_type || '').toLowerCase().includes('opus');
