@@ -1,0 +1,6 @@
+{
+  "name": "MasterWave Music",
+  "description": "Production-oriented native music streaming application with real audio engine, verified Hi-Res/lossless telemetry, LRCLIB synchronized lyrics, and Last.fm scrobbling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
