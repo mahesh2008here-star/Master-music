@@ -12,10 +12,13 @@ import {
   Download,
   CheckCircle2,
   BookmarkPlus,
-  ChevronRight
+  ChevronRight,
+  WifiOff,
+  HardDrive
 } from 'lucide-react';
 import { Track, Playlist } from '../types/music';
 import { newpipeService } from '../services/newpipeService';
+import { DownloadedItem } from '../services/downloadService';
 import {
   ytMusicService,
   YTMusicArtistSummary,
@@ -24,12 +27,22 @@ import {
 } from '../services/ytMusicService';
 import { BoldSearchIcon } from './CustomIcons';
 
-type SearchFilterTab = 'All' | 'Songs' | 'Albums' | 'Artists' | 'Podcasts' | 'Playlists';
+type SearchFilterTab =
+  | 'All'
+  | 'Songs'
+  | 'Albums'
+  | 'Artists'
+  | 'Podcasts'
+  | 'Playlists'
+  | 'Downloaded';
 
 interface SearchModalProps {
   tracks: Track[];
+  downloads?: DownloadedItem[];
+  isOfflineOnly?: boolean;
   initialQuery?: string;
   downloadedIds?: Set<string>;
+  onToggleOfflineOnly?: () => void;
   onSelectTrack: (track: Track, queue?: Track[]) => void;
   onAddToQueue?: (track: Track) => void;
   onToggleDownload?: (track: Track) => void;
@@ -41,8 +54,11 @@ interface SearchModalProps {
 
 export const SearchModal: React.FC<SearchModalProps> = ({
   tracks,
+  downloads = [],
+  isOfflineOnly = false,
   initialQuery = '',
   downloadedIds = new Set(),
+  onToggleOfflineOnly,
   onSelectTrack,
   onAddToQueue,
   onToggleDownload,
@@ -53,6 +69,11 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 }) => {
   const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<SearchFilterTab>('All');
+  const [onlyDownloadedFilter, setOnlyDownloadedFilter] = useState(false);
+  const [isNetworkOffline, setIsNetworkOffline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine === false : false
+  );
+
   const [liveResults, setLiveResults] = useState<Track[]>([]);
   const [artistsResults, setArtistsResults] = useState<YTMusicArtistSummary[]>([]);
   const [albumsResults, setAlbumsResults] = useState<YTMusicAlbumSummary[]>([]);
@@ -67,7 +88,123 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     saved?: boolean;
   } | null>(null);
 
-  const tabs: SearchFilterTab[] = ['All', 'Songs', 'Albums', 'Artists', 'Podcasts', 'Playlists'];
+  // Listen to browser network connectivity transitions
+  useEffect(() => {
+    const handleOnline = () => setIsNetworkOffline(false);
+    const handleOffline = () => setIsNetworkOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Offline enforcement: true whenever Offline Only mode is on or the device has no network
+  const isForcedOffline = isOfflineOnly || isNetworkOffline;
+  const isQueryingDownloadedOnly =
+    isForcedOffline || onlyDownloadedFilter || activeTab === 'Downloaded';
+
+  useEffect(() => {
+    if (isForcedOffline && (activeTab === 'Podcasts' || activeTab === 'Playlists')) {
+      setActiveTab('All');
+    }
+  }, [isForcedOffline, activeTab]);
+
+  const tabs: SearchFilterTab[] = useMemo(() => {
+    if (isForcedOffline || onlyDownloadedFilter) {
+      return ['All', 'Songs', 'Albums', 'Artists', 'Downloaded'];
+    }
+    return ['All', 'Songs', 'Albums', 'Artists', 'Podcasts', 'Playlists', 'Downloaded'];
+  }, [isForcedOffline, onlyDownloadedFilter]);
+
+  const downloadSizeMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of downloads) {
+      map.set(item.id, item.fileSizeBytes || 0);
+    }
+    return map;
+  }, [downloads]);
+
+  // Playable Track representations of all downloaded items
+  const allDownloadedTracks: Track[] = useMemo(() => {
+    return downloads.map((item) => ({
+      ...item.track,
+      streamUrl: item.blobUrl || item.track.streamUrl,
+      artworkUrl: item.artworkDataUrl || item.track.artworkUrl
+    }));
+  }, [downloads]);
+
+  // Explicit query against downloaded content (matches title, artist, album, source, or cached lyrics)
+  const matchingDownloadedTracks: Track[] = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allDownloadedTracks;
+
+    const matchedIds = new Set<string>();
+    for (const item of downloads) {
+      const { track, lyricsData } = item;
+      const lyricsText = [
+        lyricsData?.plainLyrics || '',
+        ...(lyricsData?.syncedLyrics?.map((l) => l.text) || [])
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      if (
+        track.title.toLowerCase().includes(q) ||
+        track.artist.toLowerCase().includes(q) ||
+        track.album.toLowerCase().includes(q) ||
+        (track.quality?.sourceProvider || '').toLowerCase().includes(q) ||
+        (lyricsText && lyricsText.includes(q))
+      ) {
+        matchedIds.add(item.id);
+      }
+    }
+
+    return allDownloadedTracks.filter((t) => matchedIds.has(t.id));
+  }, [downloads, allDownloadedTracks, query]);
+
+  // Derive matching Artists & Albums from downloaded content when in offline/downloaded filter mode
+  const offlineArtistsResults: YTMusicArtistSummary[] = useMemo(() => {
+    const seen = new Map<string, YTMusicArtistSummary>();
+    for (const tr of matchingDownloadedTracks) {
+      const primaryArtist = tr.artist.split(',')[0].trim();
+      if (!primaryArtist) continue;
+      const key = primaryArtist.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, {
+          id: `offline-artist-${key.replace(/[^a-z0-9]/g, '-')}`,
+          name: primaryArtist,
+          avatarUrl: tr.artworkUrl,
+          role: 'Downloaded Artist'
+        });
+      }
+    }
+    return Array.from(seen.values());
+  }, [matchingDownloadedTracks]);
+
+  const offlineAlbumsResults: YTMusicAlbumSummary[] = useMemo(() => {
+    const seen = new Map<string, YTMusicAlbumSummary>();
+    for (const tr of matchingDownloadedTracks) {
+      const albumTitle = (tr.album || '').trim();
+      if (!albumTitle) continue;
+      const key = `${albumTitle.toLowerCase()}::${tr.artist.toLowerCase()}`;
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, {
+          id: `offline-album-${key.replace(/[^a-z0-9]/g, '-')}`,
+          title: albumTitle,
+          artist: tr.artist,
+          year: 0,
+          trackCount: 1,
+          coverUrl: tr.artworkUrl
+        });
+      } else {
+        existing.trackCount += 1;
+      }
+    }
+    return Array.from(seen.values());
+  }, [matchingDownloadedTracks]);
 
   const matchingLibraryTracks = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -82,12 +219,13 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 
   const runUnifiedSearch = async (searchTerm: string) => {
     const trimmed = searchTerm.trim();
-    if (!trimmed) {
+    if (!trimmed || isForcedOffline || onlyDownloadedFilter) {
       setLiveResults([]);
       setArtistsResults([]);
       setAlbumsResults([]);
       setPlaylistsResults([]);
       setPodcastResults([]);
+      setIsSearching(false);
       return;
     }
 
@@ -147,12 +285,13 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   };
 
   useEffect(() => {
-    if (!query.trim()) {
+    if (!query.trim() || isForcedOffline || onlyDownloadedFilter) {
       setLiveResults([]);
       setArtistsResults([]);
       setAlbumsResults([]);
       setPlaylistsResults([]);
       setPodcastResults([]);
+      setIsSearching(false);
       return;
     }
     const timer = setTimeout(() => {
@@ -160,14 +299,18 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, isForcedOffline, onlyDownloadedFilter]);
 
   const unifiedSongs = useMemo(() => {
+    if (isForcedOffline || onlyDownloadedFilter) {
+      return matchingDownloadedTracks;
+    }
+
     const seenIds = new Set<string>();
     const seenMeta = new Set<string>();
     const combined: Track[] = [];
 
-    for (const track of [...liveResults, ...matchingLibraryTracks]) {
+    for (const track of [...matchingDownloadedTracks, ...liveResults, ...matchingLibraryTracks]) {
       const normTitle = (track.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       const normArtist = (track.artist || '').toLowerCase().split(',')[0].replace(/[^a-z0-9]/g, '');
       const metaKey = `${normTitle}::${normArtist}`;
@@ -177,9 +320,21 @@ export const SearchModal: React.FC<SearchModalProps> = ({
       combined.push(track);
     }
     return combined;
-  }, [liveResults, matchingLibraryTracks]);
+  }, [
+    isForcedOffline,
+    onlyDownloadedFilter,
+    matchingDownloadedTracks,
+    liveResults,
+    matchingLibraryTracks
+  ]);
+
+  const displayedArtists =
+    isForcedOffline || onlyDownloadedFilter ? offlineArtistsResults : artistsResults;
+  const displayedAlbums =
+    isForcedOffline || onlyDownloadedFilter ? offlineAlbumsResults : albumsResults;
 
   const openPlaylistPreview = async (pl: YTMusicPlaylistSummary) => {
+    if (isForcedOffline) return;
     setPreviewPlaylist({ meta: pl, songs: [], loading: true, saved: false });
     try {
       const detail = await ytMusicService.getPlaylistTracks(pl.id);
@@ -222,8 +377,43 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     return `${mins}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatSize = (bytes: number) => {
+    if (!bytes) return '';
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleArtistTap = (art: YTMusicArtistSummary) => {
+    if (isForcedOffline || onlyDownloadedFilter) {
+      setQuery(art.name);
+      setActiveTab('Songs');
+      return;
+    }
+    if (onOpenArtist) {
+      onOpenArtist({
+        id: art.id.length < 18 ? art.id : undefined,
+        name: art.name
+      });
+    }
+  };
+
+  const handleAlbumTap = (alb: YTMusicAlbumSummary) => {
+    if (isForcedOffline || onlyDownloadedFilter) {
+      setQuery(alb.title);
+      setActiveTab('Songs');
+      return;
+    }
+    if (onOpenAlbum) {
+      onOpenAlbum({
+        id: alb.id.startsWith('itunes-') ? undefined : alb.id,
+        title: alb.title,
+        artist: alb.artist
+      });
+    }
+  };
+
   const renderSongRow = (track: Track, idx: number, list: Track[]) => {
-    const isDl = downloadedIds.has(track.id);
+    const isDl = downloadedIds.has(track.id) || downloadSizeMap.has(track.id);
+    const sizeBytes = downloadSizeMap.get(track.id) || 0;
     return (
       <div
         key={`sr-${track.id}-${idx}`}
@@ -243,17 +433,28 @@ export const SearchModal: React.FC<SearchModalProps> = ({
             />
           </div>
           <div className="min-w-0 flex-1">
-            <h4 className="text-[14px] font-bold text-gray-900 dark:text-white truncate">
-              {track.title}
-            </h4>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h4 className="text-[14px] font-bold text-gray-900 dark:text-white truncate">
+                {track.title}
+              </h4>
+              {isDl && (
+                <CheckCircle2
+                  aria-label="Available offline"
+                  className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0"
+                />
+              )}
+            </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
-              {track.artist} · {formatDuration(track.duration)} · {track.quality.sourceProvider}
+              {track.artist} · {formatDuration(track.duration)}
+              {isDl && sizeBytes > 0
+                ? ` · ${formatSize(sizeBytes)} · Offline`
+                : ` · ${track.quality.sourceProvider}`}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-1 flex-shrink-0">
-          {onToggleDownload && (
+          {onToggleDownload && !isForcedOffline && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -293,10 +494,12 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 
   const hasAnyResults =
     unifiedSongs.length > 0 ||
-    albumsResults.length > 0 ||
-    artistsResults.length > 0 ||
-    podcastResults.length > 0 ||
-    playlistsResults.length > 0;
+    displayedAlbums.length > 0 ||
+    displayedArtists.length > 0 ||
+    (!isForcedOffline && !onlyDownloadedFilter && (podcastResults.length > 0 || playlistsResults.length > 0));
+
+  const showFilterRow =
+    Boolean(query.trim()) || isQueryingDownloadedOnly || downloads.length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[var(--mw-page-bg)] text-gray-900 dark:text-white select-none">
@@ -304,11 +507,19 @@ export const SearchModal: React.FC<SearchModalProps> = ({
         {/* Search Bar */}
         <div className="flex items-center gap-3 pb-2.5">
           <div className="flex-1 flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-white/90 dark:bg-white/10 border border-black/[0.06] dark:border-white/10 shadow-xs focus-within:ring-2 focus-within:ring-[var(--mw-primary)]">
-            <BoldSearchIcon className="w-5 h-5 text-gray-500 flex-shrink-0" />
+            {isForcedOffline ? (
+              <WifiOff className="w-5 h-5 text-amber-500 flex-shrink-0" />
+            ) : (
+              <BoldSearchIcon className="w-5 h-5 text-gray-500 flex-shrink-0" />
+            )}
             <input
               type="text"
               autoFocus
-              placeholder="Search songs, movies, albums, artists, podcasts..."
+              placeholder={
+                isQueryingDownloadedOnly
+                  ? 'Search downloaded songs, artists, albums, lyrics...'
+                  : 'Search songs, movies, albums, artists, podcasts...'
+              }
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -339,22 +550,80 @@ export const SearchModal: React.FC<SearchModalProps> = ({
           </button>
         </div>
 
-        {/* Top Filter Tabs: All | Songs | Albums | Artists | Podcasts | Playlists */}
-        {query.trim() && (
+        {/* Explicit Offline Search Banner when Offline Only mode or No Network */}
+        {isForcedOffline && (
+          <div className="mb-2.5 px-3.5 py-2.5 rounded-2xl bg-amber-500/12 dark:bg-amber-500/15 border border-amber-500/25 flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0">
+                <WifiOff className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold text-amber-800 dark:text-amber-200 truncate">
+                  {isNetworkOffline
+                    ? 'No Network Connection • Searching Downloads'
+                    : 'Offline Only Mode • Searching Downloads'}
+                </p>
+                <p className="text-[11px] text-amber-700/80 dark:text-amber-300/80 truncate">
+                  {downloads.length === 0
+                    ? 'No offline songs cached yet'
+                    : `${downloads.length} downloaded ${downloads.length === 1 ? 'track' : 'tracks'} ready to search & play`}
+                </p>
+              </div>
+            </div>
+
+            {isOfflineOnly && !isNetworkOffline && onToggleOfflineOnly && (
+              <button
+                onClick={onToggleOfflineOnly}
+                className="px-3 py-1.5 rounded-full bg-amber-500 text-white text-[11px] font-bold flex-shrink-0 hover:brightness-95 transition-all"
+              >
+                Go Online
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Top Filter Tabs & Explicit Downloaded Only Filter Chip */}
+        {showFilterRow && (
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-3 pt-0.5 flex-shrink-0">
+            {!isForcedOffline && (
+              <button
+                onClick={() => {
+                  const next = !onlyDownloadedFilter;
+                  setOnlyDownloadedFilter(next);
+                  if (next && (activeTab === 'Podcasts' || activeTab === 'Playlists')) {
+                    setActiveTab('All');
+                  }
+                }}
+                aria-pressed={onlyDownloadedFilter}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-all flex items-center gap-1.5 border ${
+                  onlyDownloadedFilter
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25 hover:bg-emerald-500/20'
+                }`}
+              >
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>Downloaded Only</span>
+                <span className={`text-[10px] ${onlyDownloadedFilter ? 'opacity-90' : 'opacity-75'}`}>
+                  {downloads.length}
+                </span>
+              </button>
+            )}
+
             {tabs.map((tab) => {
               const selected = activeTab === tab;
               const badgeCount =
                 tab === 'Songs'
                   ? unifiedSongs.length
                   : tab === 'Albums'
-                  ? albumsResults.length
+                  ? displayedAlbums.length
                   : tab === 'Artists'
-                  ? artistsResults.length
+                  ? displayedArtists.length
                   : tab === 'Podcasts'
                   ? podcastResults.length
                   : tab === 'Playlists'
                   ? playlistsResults.length
+                  : tab === 'Downloaded'
+                  ? matchingDownloadedTracks.length
                   : 0;
 
               return (
@@ -391,23 +660,100 @@ export const SearchModal: React.FC<SearchModalProps> = ({
               <Loader2 style={{ color: 'var(--mw-primary)' }} className="w-7 h-7 animate-spin" />
               <p className="text-xs font-semibold">Searching across streaming services...</p>
             </div>
-          ) : !query.trim() ? (
+          ) : !query.trim() && !isQueryingDownloadedOnly ? (
             <div className="py-16 text-center space-y-2 text-gray-500 dark:text-gray-400">
               <BoldSearchIcon className="w-9 h-9 mx-auto opacity-35" />
               <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
                 Search songs, movie soundtracks, artists, podcasts &amp; playlists
               </p>
               <p className="text-xs max-w-xs mx-auto">
-                Results aggregate YouTube Music, JioSaavn, Apple Podcasts, Audius &amp; your Library.
+                Results aggregate YouTube Music, JioSaavn, Apple Podcasts, Audius &amp; your Downloaded library.
               </p>
             </div>
+          ) : activeTab === 'Downloaded' ? (
+            matchingDownloadedTracks.length > 0 ? (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="w-4 h-4 text-emerald-500" />
+                    <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
+                      Downloaded Content ({matchingDownloadedTracks.length})
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        onSelectTrack(matchingDownloadedTracks[0], matchingDownloadedTracks);
+                        onClose();
+                      }}
+                      style={{ backgroundColor: 'var(--mw-primary)' }}
+                      className="px-3 py-1 rounded-full text-white text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>Play All</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        const shuffled = [...matchingDownloadedTracks].sort(() => Math.random() - 0.5);
+                        onSelectTrack(shuffled[0], shuffled);
+                        onClose();
+                      }}
+                      style={{ backgroundColor: 'var(--mw-tint)', color: 'var(--mw-tint-text)' }}
+                      className="px-3 py-1 rounded-full text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <Shuffle className="w-3 h-3" />
+                      <span>Shuffle</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  {matchingDownloadedTracks.map((t, idx) =>
+                    renderSongRow(t, idx, matchingDownloadedTracks)
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="py-16 text-center space-y-2 text-gray-500 dark:text-gray-400">
+                <HardDrive className="w-8 h-8 mx-auto opacity-40" />
+                <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                  {query.trim()
+                    ? `No downloaded songs match "${query}"`
+                    : 'No downloaded songs stored offline'}
+                </p>
+                <p className="text-xs max-w-xs mx-auto">
+                  Download any track while online to search and play it offline here anytime.
+                </p>
+              </div>
+            )
           ) : activeTab === 'All' ? (
             <>
-              {artistsResults.length > 0 && (
+              {isQueryingDownloadedOnly && matchingDownloadedTracks.length > 0 && !query.trim() && (
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5" />
+                    Showing {matchingDownloadedTracks.length} downloaded offline{' '}
+                    {matchingDownloadedTracks.length === 1 ? 'track' : 'tracks'}
+                  </span>
+                  <button
+                    onClick={() => {
+                      const shuffled = [...matchingDownloadedTracks].sort(() => Math.random() - 0.5);
+                      onSelectTrack(shuffled[0], shuffled);
+                      onClose();
+                    }}
+                    style={{ backgroundColor: 'var(--mw-tint)', color: 'var(--mw-tint-text)' }}
+                    className="px-3 py-1 rounded-full text-[11px] font-bold flex items-center gap-1"
+                  >
+                    <Shuffle className="w-3 h-3" />
+                    <span>Shuffle Offline</span>
+                  </button>
+                </div>
+              )}
+
+              {displayedArtists.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                      Artists
+                      {isQueryingDownloadedOnly ? 'Downloaded Artists' : 'Artists'}
                     </h3>
                     <button
                       onClick={() => setActiveTab('Artists')}
@@ -419,17 +765,10 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                     </button>
                   </div>
                   <div className="flex gap-3.5 overflow-x-auto pb-1 scrollbar-none">
-                    {artistsResults.slice(0, 8).map((art, idx) => (
+                    {displayedArtists.slice(0, 8).map((art, idx) => (
                       <div
                         key={`all-art-${art.id}-${idx}`}
-                        onClick={() => {
-                          if (onOpenArtist) {
-                            onOpenArtist({
-                              id: art.id.length < 18 ? art.id : undefined,
-                              name: art.name
-                            });
-                          }
-                        }}
+                        onClick={() => handleArtistTap(art)}
                         className="w-22 flex flex-col items-center flex-shrink-0 cursor-pointer group"
                       >
                         <img
@@ -447,11 +786,11 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 </section>
               )}
 
-              {albumsResults.length > 0 && (
+              {displayedAlbums.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                      Albums &amp; Soundtracks
+                      {isQueryingDownloadedOnly ? 'Downloaded Albums' : 'Albums & Soundtracks'}
                     </h3>
                     <button
                       onClick={() => setActiveTab('Albums')}
@@ -463,18 +802,10 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                     </button>
                   </div>
                   <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
-                    {albumsResults.slice(0, 8).map((alb, idx) => (
+                    {displayedAlbums.slice(0, 8).map((alb, idx) => (
                       <div
                         key={`all-alb-${alb.id}-${idx}`}
-                        onClick={() => {
-                          if (onOpenAlbum) {
-                            onOpenAlbum({
-                              id: alb.id.startsWith('itunes-') ? undefined : alb.id,
-                              title: alb.title,
-                              artist: alb.artist
-                            });
-                          }
-                        }}
+                        onClick={() => handleAlbumTap(alb)}
                         className="w-32 flex-shrink-0 cursor-pointer group"
                       >
                         <img
@@ -497,7 +828,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 <section className="space-y-1.5">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                      Songs
+                      {isQueryingDownloadedOnly ? 'Downloaded Songs' : 'Songs'}
                     </h3>
                     {unifiedSongs.length > 8 && (
                       <button
@@ -511,12 +842,14 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                     )}
                   </div>
                   <div className="space-y-1">
-                    {unifiedSongs.slice(0, 12).map((t, idx) => renderSongRow(t, idx, unifiedSongs))}
+                    {(isQueryingDownloadedOnly ? unifiedSongs : unifiedSongs.slice(0, 12)).map(
+                      (t, idx) => renderSongRow(t, idx, unifiedSongs)
+                    )}
                   </div>
                 </section>
               )}
 
-              {podcastResults.length > 0 && (
+              {!isQueryingDownloadedOnly && podcastResults.length > 0 && (
                 <section className="space-y-1.5">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
@@ -537,7 +870,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 </section>
               )}
 
-              {playlistsResults.length > 0 && (
+              {!isQueryingDownloadedOnly && playlistsResults.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center justify-between px-1">
                     <h3 className="font-display text-sm font-extrabold uppercase tracking-wider text-gray-600 dark:text-gray-300">
@@ -578,9 +911,18 @@ export const SearchModal: React.FC<SearchModalProps> = ({
               )}
 
               {!hasAnyResults && !isSearching && (
-                <p className="text-center text-xs text-gray-500 dark:text-gray-400 py-16">
-                  No results found for "{query}".
-                </p>
+                <div className="text-center text-xs text-gray-500 dark:text-gray-400 py-16 space-y-1.5">
+                  <p className="font-bold text-gray-700 dark:text-gray-200">
+                    {isQueryingDownloadedOnly
+                      ? query.trim()
+                        ? `No downloaded content found for "${query}".`
+                        : 'No downloaded songs available offline.'
+                      : `No results found for "${query}".`}
+                  </p>
+                  {isQueryingDownloadedOnly && (
+                    <p>Only songs saved to offline storage can be queried right now.</p>
+                  )}
+                </div>
               )}
             </>
           ) : activeTab === 'Songs' ? (
@@ -590,24 +932,18 @@ export const SearchModal: React.FC<SearchModalProps> = ({
               </div>
             ) : (
               <p className="text-center text-xs text-gray-500 py-16">
-                No matching songs for "{query}".
+                {isQueryingDownloadedOnly
+                  ? `No downloaded songs match "${query || 'your library'}".`
+                  : `No matching songs for "${query}".`}
               </p>
             )
           ) : activeTab === 'Albums' ? (
-            albumsResults.length > 0 ? (
+            displayedAlbums.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
-                {albumsResults.map((alb, idx) => (
+                {displayedAlbums.map((alb, idx) => (
                   <div
                     key={`tab-alb-${alb.id}-${idx}`}
-                    onClick={() => {
-                      if (onOpenAlbum) {
-                        onOpenAlbum({
-                          id: alb.id.startsWith('itunes-') ? undefined : alb.id,
-                          title: alb.title,
-                          artist: alb.artist
-                        });
-                      }
-                    }}
+                    onClick={() => handleAlbumTap(alb)}
                     className="p-2.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.05] hover:bg-black/[0.06] cursor-pointer group"
                   >
                     <div className="aspect-square rounded-xl overflow-hidden bg-neutral-200 dark:bg-neutral-800 mb-2">
@@ -628,23 +964,18 @@ export const SearchModal: React.FC<SearchModalProps> = ({
             ) : (
               <div className="py-16 text-center text-xs text-gray-500">
                 <Disc3 className="w-7 h-7 mx-auto mb-2 opacity-40" />
-                No albums or movie soundtracks found for "{query}".
+                {isQueryingDownloadedOnly
+                  ? `No downloaded albums match "${query || 'your library'}".`
+                  : `No albums or movie soundtracks found for "${query}".`}
               </div>
             )
           ) : activeTab === 'Artists' ? (
-            artistsResults.length > 0 ? (
+            displayedArtists.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {artistsResults.map((art, idx) => (
+                {displayedArtists.map((art, idx) => (
                   <button
                     key={`tab-art-${art.id}-${idx}`}
-                    onClick={() => {
-                      if (onOpenArtist) {
-                        onOpenArtist({
-                          id: art.id.length < 18 ? art.id : undefined,
-                          name: art.name
-                        });
-                      }
-                    }}
+                    onClick={() => handleArtistTap(art)}
                     className="p-3 rounded-2xl bg-black/[0.03] dark:bg-white/[0.05] hover:bg-black/[0.06] flex items-center gap-3.5 text-left transition-colors"
                   >
                     <img
@@ -666,7 +997,9 @@ export const SearchModal: React.FC<SearchModalProps> = ({
             ) : (
               <div className="py-16 text-center text-xs text-gray-500">
                 <UserRound className="w-7 h-7 mx-auto mb-2 opacity-40" />
-                No artists found for "{query}".
+                {isQueryingDownloadedOnly
+                  ? `No downloaded artists match "${query || 'your library'}".`
+                  : `No artists found for "${query}".`}
               </div>
             )
           ) : activeTab === 'Podcasts' ? (

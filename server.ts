@@ -5,7 +5,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Readable } from 'node:stream';
-import { Innertube } from 'youtubei.js';
+import { Innertube, Platform, type Types } from 'youtubei.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,8 +30,31 @@ const newpipeConfig: PipedInstanceState = {
 };
 
 let innertubePromise: Promise<Innertube> | null = null;
+let evalShimConfigured = false;
+
+function ensureInnertubeEvalShim(): void {
+  if (evalShimConfigured) return;
+  Platform.shim.eval = async (
+    data: Types.BuildScriptResult,
+    env: Record<string, Types.VMPrimative>
+  ) => {
+    const properties: string[] = [];
+    if (env.n) {
+      properties.push(`n: exportedVars.nFunction("${env.n}")`);
+    }
+    if (env.sig) {
+      properties.push(`sig: exportedVars.sigFunction("${env.sig}")`);
+    }
+    const code = data.output.includes('return process(')
+      ? data.output
+      : `${data.output}\nreturn { ${properties.join(', ')} }`;
+    return new Function(code)();
+  };
+  evalShimConfigured = true;
+}
 
 async function getInnertube(): Promise<Innertube> {
+  ensureInnertubeEvalShim();
   if (!innertubePromise) {
     innertubePromise = Innertube.create({
       lang: 'en',
@@ -836,14 +859,16 @@ async function startServer() {
       }
     }
 
-    // Attempt B: youtubei.js InnerTube direct extraction
+    // Attempt B: youtubei.js InnerTube direct extraction with signature deciphering
     try {
       const yt = await getInnertube();
-      for (const clientName of ['ANDROID', 'IOS', 'WEB'] as const) {
+      const clients: Types.InnerTubeClient[] = ['ANDROID_VR', 'YTMUSIC_ANDROID', 'ANDROID', 'IOS', 'WEB'];
+      for (const clientName of clients) {
         try {
-          const info = await yt.getBasicInfo(videoId, clientName as any);
+          const info = await yt.getBasicInfo(videoId, { client: clientName });
           const fmt = info.chooseFormat({ type: 'audio', quality: 'best' });
-          if (fmt && fmt.url) {
+          const streamUrl = fmt ? await fmt.decipher(yt.session.player) : '';
+          if (fmt && streamUrl) {
             const isOpus = (fmt.mime_type || '').toLowerCase().includes('opus');
             const bitrateKbps = fmt.bitrate ? Math.round(fmt.bitrate / 1000) : 128;
             res.json({
@@ -856,8 +881,8 @@ async function startServer() {
               provider: `NewPipe / InnerTube (${clientName})`,
               audioStreams: [
                 {
-                  url: proxiedAudioUrl(fmt.url),
-                  rawUrl: fmt.url,
+                  url: proxiedAudioUrl(streamUrl),
+                  rawUrl: streamUrl,
                   codec: isOpus ? 'Opus' : 'AAC-LC',
                   container: isOpus ? 'WebM' : 'MP4 / M4A',
                   mimeType: fmt.mime_type || (isOpus ? 'audio/webm' : 'audio/mp4'),

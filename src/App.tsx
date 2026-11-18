@@ -309,7 +309,7 @@ export default function App() {
         });
       }
     },
-    [getPlayableTrack]
+    [getPlayableTrack, isOfflineOnly]
   );
 
   // Handle Play / Pause — ensures audio source is actually loaded if pressed right on startup
@@ -984,8 +984,11 @@ export default function App() {
       {isSearchOpen && (
         <SearchModal
           tracks={tracks}
+          downloads={downloads}
+          isOfflineOnly={isOfflineOnly}
           initialQuery={searchInitialQuery}
           downloadedIds={downloadedIds}
+          onToggleOfflineOnly={() => setIsOfflineOnly((prev) => !prev)}
           onSelectTrack={(track, queue) => handlePlayTrack(track, queue, 'Search')}
           onAddToQueue={handleAddToQueue}
           onToggleDownload={handleToggleDownload}
